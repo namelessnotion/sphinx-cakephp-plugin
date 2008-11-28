@@ -141,7 +141,7 @@ class SphinxIndexableBehavior extends ModelBehavior {
         if($exclude && preg_match("/^not$/i", $exclude)) {
             $exclude = true;
         } else {
-            $exclde = false;
+            $exclude = false;
         }
 
         $filters = array();
