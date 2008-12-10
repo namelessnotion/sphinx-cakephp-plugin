@@ -1,5 +1,5 @@
 <?php
-App::import('Vendor', 'sphinxapi', array('file' => 'sphinxapi'.DS.'sphinxapi.php'));
+App::import('Vendor', 'SphinxSearchable.sphinxapi', array('file' => 'sphinxapi'.DS.'sphinxapi.php'));
 class SphinxSource extends Datasource {
     var $sphinx = false;
 

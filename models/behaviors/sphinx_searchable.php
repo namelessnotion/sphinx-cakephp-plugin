@@ -1,5 +1,5 @@
 <?php
-class SphinxIndexableBehavior extends ModelBehavior {
+class SphinxSearchableBehavior extends ModelBehavior {
 
     var $sphinx = false;
     var $schema = array();
@@ -26,6 +26,7 @@ class SphinxIndexableBehavior extends ModelBehavior {
      */
 
     function setup(&$Model, $settings = array()) {
+        debug("loaded");
         if(!isset($this->settings[$Model->alias])) {
             $this->settings[$Model->alias] = array();
         }
@@ -34,7 +35,8 @@ class SphinxIndexableBehavior extends ModelBehavior {
         }
         $this->settings[$Model->alias] = Set::merge($this->defaultSettings, $this->settings[$Model->alias]);
         $this->settings[$Model->alias] = array_merge($this->settings[$Model->alias], $settings);
-        
+
+        App::import('Datasource', 'SphinxSearchable.SphinxSource');
         $this->sphinx = ConnectionManager::getDataSource('sphinx');
         $this->schema = $this->sphinx->getSchema(Inflector::tableize($Model->alias));
         $this->autoMapFields($Model);
