@@ -10,6 +10,14 @@ class GenerateConfigTask extends Shell {
     var $generatedConfig = null;
     var $sphinxDatasource = false;
 
+    var $attributesMap = array(
+        'primaryKey' => 'sql_attr_uint',
+        'integer' => 'sql_attr_uint',
+        'datetime' => 'sql_attr_timestap',
+        'habtmPrimaryKey' => 'sql_attr_multi',
+        'hasManyPrimaryKey' => 'sql_attr_multi'
+    );
+
     function _welcome() {
         $this->out("Generating Sphinx Config file for indexer and searchd");
         $this->hr();
@@ -62,14 +70,31 @@ class GenerateConfigTask extends Shell {
                 unset($source['index']);
             }
 
-            if(is_array($source['sql_query'])) 
-            {
+            if(is_array($source['sql_query'])) {
                 $source['sql_query']['log'] = true;
                 $queryAndAttrs = $this->_getSQLQuery($modelName, $source['sql_query']);
                 $source['sql_query'] = $queryAndAttrs['sql_query'];
             }
+
+            if(is_array($source['attributes'])) {
+                $this->getAttributes($modelName, $source['attributes']);
+            }
         }
     }
+
+    function _buildSources() {
+        $content = "";
+        foreach($this->sphinxConfig->default['sources'] as $key => $source) {
+            $content .= sprintf("source %s {\n\r", strtolower($key));
+            foreach($source as $fieldName => $fieldValue) {
+                $content .= sprintf("\t%s = %s\n\r", $fieldName, $fieldValue);
+            }
+            $content .= "\n\r}";
+        }
+        return $content;
+    }
+
+
     /**
      * Turns a cakephp $options array for find into a sql query we can use in sphinx config
      * Notes: All field names are lowercase in sphinx, also .'s are not handled so we replace .'s with __ (underscore x2)
@@ -153,8 +178,6 @@ class GenerateConfigTask extends Shell {
                     $isMulti[] = $assocModel;
                 }
             }
-            print_r($leftJoins);
-            print_r($isMulti);
         }
 
         if(isset($fields)) {
@@ -185,8 +208,6 @@ class GenerateConfigTask extends Shell {
 
                 unset($model);
             }
-            print_r($attrs);
-            print_r($selectFields);
             $sqlQuery = "select ".implode(",\n\r\t\t", $selectFields)."\n\r\t\tFROM ".$modelTable." ".implode("\n\r\t\t", $leftJoins);
             $where = "";
             if(isset($conditions)) {
@@ -205,6 +226,95 @@ class GenerateConfigTask extends Shell {
         return array("sql_query" => $sqlQuery, "sql_attr" => $attrs);
     }
 
+    function getAttributes($modelName, $options) {
+        $model = $this->{$modelName};
+        $attributes = array();
+        foreach($options as $attribute) {
+            $attributeType = $this->getAttributeType($this->{$modelName}, $attribute);
+            if($attributeType) {
+                $attributes[$attributeType][] = $attribute;
+            }
+        }
+
+        //need to process hasMany and habtm assoc
+        print_r($attributes);
+        foreach($attributes['sql_attr_multi'] as $attrMulti) {
+            $parts = explode('.', $attrMulti);
+            $secondaryModel = $this->{$parts[0]}; 
+            $field = $parts[1];
+            print_r($this->multiAttribute($model, $secondaryModel, $field));
+        }
+    }
+
+    function multiAttribute($primaryModel, $secondaryModel, $field) {
+        //detect if hasMany or habtm
+        $attribute = false;
+        if($this->isHabtmAssoc($primaryModel, $secondaryModel)) {
+            $attribute = $this->habtmAttribute($primaryModel, $secondaryModel, $field);
+        } else if($this->isHasManyAssoc($primaryModel, $secondaryModel)) {
+            $attribute = $this->hasManyAttribute($primaryModel, $secondaryModel, $field);
+        }
+        return $attribute;
+    }
+
+    function hasManyAttribute($primaryModel, $secondaryModel, $field) {
+        $attribute = 'sql_attr_multi = uint '; 
+        $field = $this->cakeFieldToSphinxField($field);
+        $attribute = $field." from query; \\\n\r\t";
+        // select comments.post_id, comments.id from comments
+        $query = "select ".$secondaryModel->table.".".$primaryModel->hasMany[$secondaryModel->name]['foriegnKey'];
+        print_r($query);
+    }
+
+    function habtmAttribute($primaryModel, $secondaryModel, $field) {
+    }
+
+    function getAttributeType($primaryModel, $fieldName) {
+        $fieldParts = explode('.',$fieldName);
+        print_r($fieldParts);
+        $model = $field = $fieldType = null;
+        if(count($fieldParts) == 1) {
+            $this->_runtimeLoadModel($primaryModel);
+            $model = $this->{$primaryModel};
+            $field = $fieldParts[0];
+        } else if(count($fieldParts) == 2) {
+            $this->_runtimeLoadModel($fieldParts[0]);
+            $model = $this->{$fieldParts[0]};
+            $field = $fieldParts[1];
+        }
+
+        if($this->isHabtmAssoc($primaryModel, $model)) {
+            return $this->attributesMap['habtmPrimaryKey'];
+        } else if($this->isHasManyAssoc($primaryModel, $model)) {
+            return $this->attributesMap['hasManyPrimaryKey'];
+        } else if($model->primaryKey == $field) {
+            return $this->attributesMap['primaryKey'];
+        } else {
+            if(isset($this->attributeMap[$model->getColumnType($field)])) {
+                return $this->attributeMap[$model->getColumnType($field)];
+            }
+        }
+        return false;
+    }
+
+    function isHasManyAssoc($primaryModel, $secondaryModel) {
+        if(isset($primaryModel->hasMany[$secondaryModel->name])) {
+            return true;
+        } else if(in_array($secondaryModel->name, $primaryModel->hasMany)) {
+            return true;
+        }
+        return false;
+    }
+
+    function isHabtmAssoc($primaryModel, $secondaryModel) {
+        if(isset($primaryModel->hasAndBelongsToMany[$secondaryModel->name])) {
+            return true;
+        } else if(in_array($secondaryModel->name, $primaryModel->hasMany)) {
+            return true;
+        }
+        return false;
+    }
+            
     function _loadSphinxDatasource() {
         if(!$this->sphinxDatasource) {
             App::import('Datasource', 'SphinxSearchable.SphinxSource');
@@ -217,16 +327,13 @@ class GenerateConfigTask extends Shell {
         $this->_loadModels();
     }
 
-    function _buildSources() {
-        $content = "";
+
+    function _buildIndexes() {
+        $content = '';
         foreach($this->sphinxConfig->default['sources'] as $key => $source) {
-            $content .= sprintf("source %s {\n\r", strtolower($key));
-            foreach($source as $fieldName => $fieldValue) {
-                $content .= sprintf("\t%s = %s\n\r", $fieldName, $fieldValue);
-            }
-            $content .= "\n\r}";
+
         }
-        return $content;
+
     }
 
     function cakeDbConfigToSphinx($config) {
@@ -244,6 +351,22 @@ class GenerateConfigTask extends Shell {
             }
         }
         return $sphinxDbConfig;
+    }
+
+    function cakeFieldToSphinxField($fieldName) {
+        if($c=preg_match_all("/((?:[a-z][A-Z][a-z0-9_]*))/is", $cakephp_field_name, $matches)) {
+            return Inflector::underscore($matches[0][0])."__".$matches[0][1];
+        }
+    }
+
+    function sphinxFieldToCakeField($fieldName) {
+        $field =  str_replace("__", ".", $sphinx_field_or_attr_name);
+        if($c=preg_match_all("/((?:[a-z][a-z0-9_]*))/is", $field, $matches)) {
+            if(isset($matches[0][1])) {
+                $field = Inflector::camelize($matches[0][0]).".".$matches[0][1];
+            }
+        }
+        return $field;
     }
 }
 
